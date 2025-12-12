@@ -1,0 +1,33 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "node-cleanup-webhook.fullname" . }}
+  labels:
+    {{- include "node-cleanup-webhook.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "node-cleanup-webhook.fullname" . }}
+  {{- end }}
+webhooks:
+  - name: node-cleanup.infra.894.io
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["nodes"]
+        scope: "Cluster"
+    clientConfig:
+      service:
+        name: {{ include "node-cleanup-webhook.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-node
+        port: {{ .Values.service.port }}
+      {{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    reinvocationPolicy: Never

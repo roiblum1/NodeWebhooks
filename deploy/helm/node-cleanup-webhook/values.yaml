@@ -1,0 +1,120 @@
+# Default values for node-cleanup-webhook
+
+replicaCount: 2
+
+image:
+  repository: registry.example.com/node-cleanup-webhook
+  pullPolicy: Always
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+    - ALL
+
+service:
+  type: ClusterIP
+  port: 443
+  targetPort: 8443
+
+webhook:
+  failurePolicy: Ignore
+  timeoutSeconds: 10
+  port: 8443
+  # Certificate management: cert-manager or manual
+  certManager:
+    enabled: true
+    issuerRef:
+      name: selfsigned-issuer
+      kind: ClusterIssuer
+
+  # For manual certificate management
+  # caBundle: ""  # Base64 encoded CA certificate
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: node-cleanup-webhook
+          topologyKey: kubernetes.io/hostname
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Finalizer configuration
+finalizer:
+  name: "infra.894.io/node-cleanup"
+
+# Cleanup configuration
+cleanup:
+  # Enable Portworx cleanup
+  portworx:
+    enabled: false
+    labelSelector: "px/enabled=true"
+
+  # Timeout for cleanup operations
+  timeout: 300s
+
+  # Retry configuration
+  retryDelay: 10s
+
+# Logging configuration
+log:
+  verbosity: 2
+  format: text  # text or json
+
+# Monitoring
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
+rbac:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["nodes"]
+      verbs: ["get", "list", "watch", "patch", "update"]
+    - apiGroups: [""]
+      resources: ["events"]
+      verbs: ["create", "patch"]
+    # Optional: For Portworx StorageNode CRD
+    - apiGroups: ["core.libopenstorage.org"]
+      resources: ["storagenodes"]
+      verbs: ["get", "list", "watch"]

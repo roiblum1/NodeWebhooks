@@ -1,0 +1,18 @@
+apiVersion: v2
+name: node-cleanup-webhook
+description: A Kubernetes webhook that manages node cleanup before deletion
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - webhook
+  - node
+  - cleanup
+  - finalizer
+maintainers:
+  - name: Infrastructure Team
+    email: infra@894.io
+home: https://github.com/894/node-cleanup-webhook
+sources:
+  - https://github.com/894/node-cleanup-webhook

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "node-cleanup-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "node-cleanup-webhook.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    finalizer:
+      name: {{ .Values.finalizer.name }}
+    cleanup:
+      {{- toYaml .Values.cleanup | nindent 6 }}
+    log:
+      {{- toYaml .Values.log | nindent 6 }}
