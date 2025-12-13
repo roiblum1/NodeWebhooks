@@ -6,14 +6,16 @@ A Kubernetes mutating admission webhook that automatically manages node cleanup 
 [![Go Report Card](https://goreportcard.com/badge/github.com/894/node-cleanup-webhook)](https://goreportcard.com/report/github.com/894/node-cleanup-webhook)
 
 ## Features
-- **Air-Gapped Ready**: Vendored dependencies for disconnected environments
 
+- **Plugin-Based Architecture**: Ordered execution of cleanup plugins
+- **Structured Logging**: Machine-parseable logs for better observability
+- **Air-Gapped Ready**: Vendored dependencies for disconnected environments
 - **Automatic Finalizer Management**: Adds finalizers to all nodes (existing and new)
 - **Cleanup Orchestration**: Runs custom cleanup logic before node deletion
 - **Webhook-Based**: Simpler than full operator pattern
 - **Production Ready**: Includes Helm charts, RBAC, monitoring, and more
 - **Highly Available**: Runs with 2+ replicas and pod disruption budgets
-- **Flexible Deployment**: Supports cert-manager or manual certificate management
+- **Flexible Deployment**: Supports manual certificates (no cert-manager needed)
 - **Emergency Override**: Skip cleanup with annotation when needed
 
 ## Architecture
@@ -90,6 +92,65 @@ kubectl get nodes -o custom-columns=NAME:.metadata.name,FINALIZERS:.metadata.fin
 kubectl logs -n node-cleanup-system -l app.kubernetes.io/name=node-cleanup-webhook -f
 ```
 
+## Plugin System
+
+The webhook uses a plugin-based architecture for cleanup operations. Plugins execute in the **exact order** specified in the `ENABLED_PLUGINS` environment variable.
+
+### Available Plugins
+
+- **logger** - Logs node deletion details (enabled by default)
+- **portworx** - Portworx node decommissioning (placeholder implementation)
+
+### Configuring Plugins
+
+```yaml
+# Helm values.yaml
+env:
+  ENABLED_PLUGINS: "logger,portworx"  # Order matters!
+
+  # Logger plugin
+  LOGGER_FORMAT: "pretty"
+  LOGGER_VERBOSITY: "info"
+
+  # Portworx plugin
+  PORTWORX_LABEL_SELECTOR: "px/enabled=true"
+  PORTWORX_API_ENDPOINT: "http://portworx-api:9001"
+```
+
+**Plugin execution order matters:**
+```bash
+ENABLED_PLUGINS=logger,portworx  # logger runs first, then portworx
+ENABLED_PLUGINS=portworx,logger  # portworx runs first, then logger
+```
+
+See [docs/ADDING_PLUGINS.md](docs/ADDING_PLUGINS.md) for creating custom plugins.
+
+## Air-Gapped / Disconnected Environments
+
+This webhook is **fully compatible** with air-gapped environments:
+
+- ✅ All dependencies vendored (3,361 files, 46 MB)
+- ✅ Builds with `-mod=vendor` (no internet needed)
+- ✅ Manual certificates supported (no cert-manager required)
+- ✅ Simple container image transfer
+
+**Quick deployment:**
+
+```bash
+# Connected environment: Build and export
+podman build -t webhook:v1.0.0 .
+podman save webhook:v1.0.0 -o webhook.tar
+
+# Transfer webhook.tar (~50-80 MB) to air-gapped environment
+
+# Air-gapped environment: Load and deploy
+podman load -i webhook.tar
+podman tag webhook:v1.0.0 internal-registry/webhook:v1.0.0
+podman push internal-registry/webhook:v1.0.0
+```
+
+**Complete guide:** [docs/AIR_GAPPED_DEPLOYMENT.md](docs/AIR_GAPPED_DEPLOYMENT.md)
+
 ## Configuration
 
 ### Helm Values
@@ -107,19 +168,14 @@ image:
 
 # Webhook behavior
 webhook:
+  certManager:
+    enabled: false  # Use manual certificates for air-gapped
   failurePolicy: Ignore  # Allow node creation if webhook is down
   timeoutSeconds: 10
 
-# Cleanup configuration
-cleanup:
-  portworx:
-    enabled: false  # Enable Portworx cleanup
-  timeout: 300s
-  retryDelay: 10s
-
-# Logging
-log:
-  verbosity: 2  # 0-4, higher = more verbose
+# Plugin configuration
+env:
+  ENABLED_PLUGINS: "logger,portworx"
 ```
 
 Full configuration options: [values.yaml](deploy/helm/node-cleanup-webhook/values.yaml)

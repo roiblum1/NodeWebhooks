@@ -56,38 +56,57 @@ ls vendor/
 
 ## How to Use in Air-Gapped Environment
 
-### Quick Start
+### 🚀 Recommended Approach: Container Image Transfer
 
-**Connected Environment (preparation):**
+**This is the simplest and most reliable approach for air-gapped deployments.**
+
+**Connected Environment (build & export):**
 ```bash
 # 1. Clone repository (includes vendor/)
-git clone https://github.com/your-org/node-cleanup-webhook.git
+git clone <your-repo>
+cd node-cleanup-webhook
 
-# 2. Build image
+# 2. Build image (uses vendored dependencies - no internet needed!)
 podman build -t node-cleanup-webhook:v1.0.0 .
 
-# 3. Export image
-podman save node-cleanup-webhook:v1.0.0 -o webhook.tar
+# 3. Export image to tar file
+podman save node-cleanup-webhook:v1.0.0 -o node-cleanup-webhook-v1.0.0.tar
 
-# 4. Transfer webhook.tar to air-gapped environment
+# 4. Transfer tar file to air-gapped environment
+# Size: ~50-80 MB
 ```
 
-**Air-Gapped Environment (deployment):**
+**Air-Gapped Environment (load & deploy):**
 ```bash
-# 1. Load image
-podman load -i webhook.tar
+# 1. Load image from tar
+podman load -i node-cleanup-webhook-v1.0.0.tar
 
 # 2. Tag for internal registry
-podman tag node-cleanup-webhook:v1.0.0 internal-registry/webhook:v1.0.0
+podman tag node-cleanup-webhook:v1.0.0 \
+  internal-registry.company.local/infra/webhook:v1.0.0
 
 # 3. Push to internal registry
-podman push internal-registry/webhook:v1.0.0
+podman push internal-registry.company.local/infra/webhook:v1.0.0
 
-# 4. Deploy to Kubernetes
-helm install webhook ./deploy/helm/... \
-  --set image.repository=internal-registry/webhook \
-  --set image.tag=v1.0.0
+# 4. Generate manual certificates (no cert-manager needed)
+openssl req -x509 -nodes -newkey rsa:4096 -keyout tls.key -out tls.crt -days 365 \
+  -subj "/CN=node-cleanup-webhook.node-cleanup-system.svc"
+kubectl create secret tls webhook-server-cert --cert=tls.crt --key=tls.key -n node-cleanup-system
+
+# 5. Deploy to Kubernetes
+CA_BUNDLE=$(cat tls.crt | base64 -w 0)
+helm install webhook ./deploy/helm/node-cleanup-webhook \
+  --namespace node-cleanup-system \
+  --create-namespace \
+  --set image.repository=internal-registry.company.local/infra/webhook \
+  --set image.tag=v1.0.0 \
+  --set webhook.certManager.enabled=false \
+  --set webhook.caBundle=$CA_BUNDLE
 ```
+
+**That's it! No compilation in air-gapped environment needed.**
+
+See **[docs/AIR_GAPPED_DEPLOYMENT.md](docs/AIR_GAPPED_DEPLOYMENT.md)** for complete step-by-step guide.
 
 ## Available Make Targets (No Internet Required)
 
