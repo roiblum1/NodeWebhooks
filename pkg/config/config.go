@@ -17,6 +17,9 @@ type Config struct {
 	Port        int
 	Kubeconfig  string
 
+	// Kubernetes client configuration
+	InsecureSkipTLSVerify bool // Skip TLS verification for kube-apiserver (insecure environments)
+
 	// Plugin configuration
 	EnabledPlugins []string
 	PluginConfigs  map[string]PluginConfig
@@ -31,12 +34,13 @@ type PluginConfig struct {
 // LoadFromEnv loads configuration from environment variables
 func LoadFromEnv() *Config {
 	cfg := &Config{
-		TLSCertFile:    getEnv("TLS_CERT_FILE", "/etc/webhook/certs/tls.crt"),
-		TLSKeyFile:     getEnv("TLS_KEY_FILE", "/etc/webhook/certs/tls.key"),
-		Port:           getEnvInt("PORT", 8443),
-		Kubeconfig:     getEnv("KUBECONFIG", ""),
-		PluginConfigs:  make(map[string]PluginConfig),
-		EnabledPlugins: []string{},
+		TLSCertFile:           getEnv("TLS_CERT_FILE", "/etc/webhook/certs/tls.crt"),
+		TLSKeyFile:            getEnv("TLS_KEY_FILE", "/etc/webhook/certs/tls.key"),
+		Port:                  getEnvInt("PORT", 8443),
+		Kubeconfig:            getEnv("KUBECONFIG", ""),
+		InsecureSkipTLSVerify: getEnvBool("INSECURE_SKIP_TLS_VERIFY", false),
+		PluginConfigs:         make(map[string]PluginConfig),
+		EnabledPlugins:        []string{},
 	}
 
 	// Load enabled plugins from ENABLED_PLUGINS env var
@@ -117,6 +121,7 @@ func (c *Config) Print() {
 	klog.Infof("  TLS Cert: %s", c.TLSCertFile)
 	klog.Infof("  TLS Key: %s", c.TLSKeyFile)
 	klog.Infof("  Port: %d", c.Port)
+	klog.Infof("  Insecure Skip TLS Verify: %t", c.InsecureSkipTLSVerify)
 	klog.Infof("  Enabled Plugins: %v", c.EnabledPlugins)
 
 	for _, pluginName := range c.EnabledPlugins {
@@ -152,12 +157,24 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
+	}
+	return defaultValue
+}
+
 // Example .env file format:
 //
 // # Webhook configuration
 // PORT=8443
 // TLS_CERT_FILE=/etc/webhook/certs/tls.crt
 // TLS_KEY_FILE=/etc/webhook/certs/tls.key
+//
+// # Kubernetes client configuration
+// INSECURE_SKIP_TLS_VERIFY=false  # Set to true for insecure kube-apiserver (not recommended for production)
 //
 // # Plugin configuration
 // ENABLED_PLUGINS=logger,drain,portworx,slack

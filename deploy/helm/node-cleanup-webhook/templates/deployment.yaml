@@ -38,6 +38,9 @@ spec:
             - --tls-key=/etc/webhook/certs/tls.key
             - --port={{ .Values.webhook.port }}
             - -v={{ .Values.log.verbosity }}
+          env:
+            - name: INSECURE_SKIP_TLS_VERIFY
+              value: "{{ .Values.kubeClient.insecureSkipTLSVerify }}"
           ports:
             - name: https
               containerPort: {{ .Values.webhook.port }}

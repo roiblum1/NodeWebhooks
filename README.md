@@ -104,7 +104,10 @@ The webhook uses a plugin-based architecture for cleanup operations. Plugins exe
 ### Configuring Plugins
 
 ```yaml
-# Helm values.yaml
+# Helm values.yaml - Set via deployment
+kubeClient:
+  insecureSkipTLSVerify: false  # Set to true for insecure kube-apiserver
+
 env:
   ENABLED_PLUGINS: "logger,portworx"  # Order matters!
 
@@ -122,6 +125,15 @@ env:
 ENABLED_PLUGINS=logger,portworx  # logger runs first, then portworx
 ENABLED_PLUGINS=portworx,logger  # portworx runs first, then logger
 ```
+
+**Insecure kube-apiserver (not recommended for production):**
+```yaml
+# If your kube-apiserver has invalid/self-signed certificates
+kubeClient:
+  insecureSkipTLSVerify: true  # Skips TLS verification
+```
+
+**Note:** The webhook itself still needs valid TLS certificates for incoming connections from kube-apiserver. The `insecureSkipTLSVerify` only affects outgoing connections to kube-apiserver.
 
 See [docs/ADDING_PLUGINS.md](docs/ADDING_PLUGINS.md) for creating custom plugins.
 

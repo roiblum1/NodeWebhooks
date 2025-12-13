@@ -49,6 +49,13 @@ webhook:
   # For manual certificate management
   # caBundle: ""  # Base64 encoded CA certificate
 
+# Kubernetes client configuration
+kubeClient:
+  # Skip TLS verification when connecting to kube-apiserver
+  # ONLY use this in insecure/development environments
+  # NOT RECOMMENDED for production
+  insecureSkipTLSVerify: false
+
 resources:
   limits:
     cpu: 200m

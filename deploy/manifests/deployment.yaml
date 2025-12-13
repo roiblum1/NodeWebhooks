@@ -56,7 +56,14 @@ spec:
             - --tls-key=/etc/webhook/certs/tls.key
             - --port=8443
             - -v=2
-          
+
+          env:
+            # Kubernetes client configuration
+            # Uncomment to skip TLS verification for insecure kube-apiserver
+            # NOT RECOMMENDED for production
+            # - name: INSECURE_SKIP_TLS_VERIFY
+            #   value: "true"
+
           ports:
             - name: https
               containerPort: 8443

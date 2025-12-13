@@ -206,6 +206,9 @@ PORT=8443
 TLS_CERT_FILE=/etc/webhook/certs/tls.crt
 TLS_KEY_FILE=/etc/webhook/certs/tls.key
 
+# Kubernetes client settings
+INSECURE_SKIP_TLS_VERIFY=false  # Set to true for insecure kube-apiserver (NOT recommended)
+
 # Plugin selection
 ENABLED_PLUGINS=logger,portworx
 
