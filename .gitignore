@@ -22,7 +22,8 @@ certs/
 *.out
 
 # Dependency directories
-vendor/
+# NOTE: vendor/ is committed for air-gapped/disconnected environments
+# vendor/
 
 # Go workspace file
 go.work
