@@ -33,6 +33,8 @@ type Watcher struct {
 	pluginRegistry *plugins.Registry
 	// Track nodes being processed to avoid duplicate work
 	processing sync.Map
+	// Context for background operations (set when Run() is called)
+	ctx context.Context
 }
 
 // New creates a new cleanup watcher
@@ -86,7 +88,12 @@ func (w *Watcher) ensureFinalizer(node *corev1.Node) {
 
 	// Add finalizer in the background
 	go func() {
-		ctx := context.Background()
+		// Use watcher context if available, otherwise use background
+		ctx := w.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+
 		if err := w.addFinalizer(ctx, node); err != nil {
 			klog.ErrorS(err, "Failed to add finalizer", "node", node.Name, "finalizer", FinalizerName)
 		} else {
@@ -119,6 +126,9 @@ func (w *Watcher) enqueueIfDeleting(node *corev1.Node) {
 // Run starts the watcher
 func (w *Watcher) Run(ctx context.Context) {
 	klog.InfoS("Starting cleanup watcher", "finalizerName", FinalizerName)
+
+	// Store context for background operations
+	w.ctx = ctx
 
 	// Start the informer
 	go w.informer.Run(ctx.Done())
@@ -182,13 +192,20 @@ func (w *Watcher) processNode(ctx context.Context, nodeName string) {
 	if cleanupErr != nil {
 		klog.ErrorS(cleanupErr, "Cleanup failed - will retry", "node", nodeName, "retryDelay", "10s")
 
-		// Re-enqueue for retry after backoff
+		// Re-enqueue for retry after backoff (respects context cancellation)
 		go func() {
-			time.Sleep(10 * time.Second)
-			w.processing.Delete(nodeName)
-			// Re-fetch and re-enqueue
-			if n, err := w.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}); err == nil {
-				w.enqueueIfDeleting(n)
+			select {
+			case <-time.After(10 * time.Second):
+				w.processing.Delete(nodeName)
+				// Re-fetch and re-enqueue
+				if n, err := w.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}); err == nil {
+					w.enqueueIfDeleting(n)
+				}
+			case <-ctx.Done():
+				// Context cancelled, stop retry
+				klog.V(2).InfoS("Retry cancelled due to context cancellation", "node", nodeName)
+				w.processing.Delete(nodeName)
+				return
 			}
 		}()
 		return
