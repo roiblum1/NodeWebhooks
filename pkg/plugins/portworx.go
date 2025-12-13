@@ -35,21 +35,23 @@ func NewPortworxPlugin(client kubernetes.Interface, labelSelector string) *Portw
 func (p *PortworxPlugin) ShouldRun(node *corev1.Node) bool {
 	// Check if node has the Portworx label
 	if val, ok := node.Labels["px/enabled"]; ok && val == "true" {
+		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", "px/enabled=true")
 		return true
 	}
 
 	// Alternative: check for px/status label
-	if _, ok := node.Labels["px/status"]; ok {
+	if status, ok := node.Labels["px/status"]; ok {
+		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", "px/status", "status", status)
 		return true
 	}
 
-	klog.V(2).Infof("Node %s does not have Portworx enabled", node.Name)
+	klog.V(2).InfoS("Node does not have Portworx enabled", "node", node.Name, "labelSelector", p.labelSelector)
 	return false
 }
 
 // Cleanup performs Portworx decommissioning
 func (p *PortworxPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
-	klog.Infof("🔧 Portworx: Decommissioning node %s", node.Name)
+	klog.InfoS("Starting Portworx decommission", "node", node.Name, "labelSelector", p.labelSelector)
 
 	// TODO: Implement actual Portworx decommissioning
 	// Options:
@@ -57,25 +59,26 @@ func (p *PortworxPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
 	// 2. Execute pxctl command via kubectl exec
 	// 3. Delete/Update StorageNode CRD
 
-	// For now, simulate the decommission process
-	klog.Infof("Portworx: Checking node status...")
+	// For now, simulate the decommission process with structured logging
+	klog.InfoS("Portworx decommission step", "node", node.Name, "step", "checking_status", "action", "validate_node")
 	time.Sleep(500 * time.Millisecond)
 
-	klog.Infof("Portworx: Starting decommission process...")
+	klog.InfoS("Portworx decommission step", "node", node.Name, "step", "starting_decommission", "action", "initiate")
 	time.Sleep(1 * time.Second)
 
-	klog.Infof("Portworx: Draining storage pools...")
+	klog.InfoS("Portworx decommission step", "node", node.Name, "step", "draining_storage", "action", "migrate_data")
 	time.Sleep(500 * time.Millisecond)
 
-	klog.Infof("Portworx: Removing node from cluster...")
+	klog.InfoS("Portworx decommission step", "node", node.Name, "step", "removing_node", "action", "cluster_removal")
 	time.Sleep(500 * time.Millisecond)
 
 	// Example implementation:
 	// if err := p.callPortworxAPI(ctx, node.Name); err != nil {
+	//     klog.ErrorS(err, "Portworx API call failed", "node", node.Name)
 	//     return fmt.Errorf("portworx API call failed: %w", err)
 	// }
 
-	klog.Infof("✅ Portworx: Successfully decommissioned node %s", node.Name)
+	klog.InfoS("Portworx decommission completed", "node", node.Name, "status", "success")
 	return nil
 }
 

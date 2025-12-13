@@ -6,6 +6,7 @@ A Kubernetes mutating admission webhook that automatically manages node cleanup 
 [![Go Report Card](https://goreportcard.com/badge/github.com/894/node-cleanup-webhook)](https://goreportcard.com/report/github.com/894/node-cleanup-webhook)
 
 ## Features
+- **Air-Gapped Ready**: Vendored dependencies for disconnected environments
 
 - **Automatic Finalizer Management**: Adds finalizers to all nodes (existing and new)
 - **Cleanup Orchestration**: Runs custom cleanup logic before node deletion

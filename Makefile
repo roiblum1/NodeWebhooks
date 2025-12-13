@@ -68,14 +68,33 @@ run-local: ## Run locally (requires kubeconfig and certs)
 test: ## Run tests
 	go test -v ./...
 
-lint: ## Run linters
-	golangci-lint run ./...
-
 fmt: ## Format code
 	go fmt ./...
 
+vet: ## Run go vet (static analysis)
+	go vet ./...
+
+check: fmt vet test ## Run all checks (fmt, vet, test)
+
 tidy: ## Tidy go.mod
 	go mod tidy
+
+vendor: ## Vendor dependencies for air-gapped environments
+	go mod vendor
+
+release-bundle: vendor ## Create air-gapped release bundle with vendor/
+	@echo "Creating air-gapped release bundle..."
+	@VERSION=$$(git describe --tags --always --dirty 2>/dev/null || echo "dev"); \
+	BUNDLE_NAME="node-cleanup-webhook-$$VERSION-airgap"; \
+	mkdir -p releases; \
+	tar -czf releases/$$BUNDLE_NAME.tar.gz \
+		--exclude='.git' \
+		--exclude='releases' \
+		--exclude='bin' \
+		--exclude='certs' \
+		.; \
+	echo "✅ Created releases/$$BUNDLE_NAME.tar.gz"; \
+	ls -lh releases/$$BUNDLE_NAME.tar.gz
 
 ## Debugging
 

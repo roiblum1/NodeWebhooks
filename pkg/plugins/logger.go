@@ -29,35 +29,46 @@ func (p *LoggerPlugin) ShouldRun(node *corev1.Node) bool {
 	return true
 }
 
-// Cleanup logs node information
+// Cleanup logs node information using structured logging
 func (p *LoggerPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
-	fmt.Printf("\n")
-	fmt.Printf("═══════════════════════════════════════════════════════════════\n")
-	fmt.Printf("  🗑️  DELETING NODE: %s\n", node.Name)
-	fmt.Printf("═══════════════════════════════════════════════════════════════\n")
-	fmt.Printf("  Name:           %s\n", node.Name)
-	fmt.Printf("  Created:        %s\n", node.CreationTimestamp.Format("2006-01-02 15:04:05"))
-	fmt.Printf("  Deletion Time:  %s\n", node.DeletionTimestamp.Format("2006-01-02 15:04:05"))
+	// Structured log with all node metadata
+	klog.InfoS("Node deletion initiated",
+		"node", node.Name,
+		"createdAt", node.CreationTimestamp.Time,
+		"deletionTimestamp", node.DeletionTimestamp.Time,
+		"uid", node.UID,
+		"labelCount", len(node.Labels),
+		"conditionCount", len(node.Status.Conditions),
+	)
 
-	// Log labels
+	// Log labels as structured data
 	if len(node.Labels) > 0 {
+		klog.V(1).InfoS("Node labels", "node", node.Name, "labels", node.Labels)
+
+		// Also print for human readability
+		fmt.Printf("\n═══════════════════════════════════════════════════════════════\n")
+		fmt.Printf("  🗑️  DELETING NODE: %s\n", node.Name)
+		fmt.Printf("═══════════════════════════════════════════════════════════════\n")
 		fmt.Printf("  Labels:\n")
 		for k, v := range node.Labels {
 			fmt.Printf("    - %s: %s\n", k, v)
 		}
 	}
 
-	// Log conditions
+	// Log conditions as structured data
 	if len(node.Status.Conditions) > 0 {
+		conditions := make(map[string]string)
+		for _, cond := range node.Status.Conditions {
+			conditions[string(cond.Type)] = string(cond.Status)
+		}
+		klog.V(1).InfoS("Node conditions", "node", node.Name, "conditions", conditions)
+
 		fmt.Printf("  Conditions:\n")
 		for _, cond := range node.Status.Conditions {
-			fmt.Printf("    - %s: %s\n", cond.Type, cond.Status)
+			fmt.Printf("    - %s: %s (reason: %s)\n", cond.Type, cond.Status, cond.Reason)
 		}
+		fmt.Printf("═══════════════════════════════════════════════════════════════\n\n")
 	}
 
-	fmt.Printf("═══════════════════════════════════════════════════════════════\n")
-	fmt.Printf("\n")
-
-	klog.Infof("Logged deletion info for node: %s", node.Name)
 	return nil
 }

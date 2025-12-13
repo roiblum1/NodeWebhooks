@@ -2,6 +2,9 @@
 bin/
 webhook
 
+# Release bundles
+releases/
+
 # Certificates
 certs/
 *.crt

@@ -23,15 +23,17 @@ type Plugin interface {
 
 // Registry manages all available cleanup plugins
 type Registry struct {
-	plugins map[string]Plugin
-	enabled map[string]bool
+	plugins      map[string]Plugin
+	enabled      map[string]bool
+	pluginOrder  []string // Execution order from ENABLED_PLUGINS env var
 }
 
 // NewRegistry creates a new plugin registry
 func NewRegistry() *Registry {
 	return &Registry{
-		plugins: make(map[string]Plugin),
-		enabled: make(map[string]bool),
+		plugins:     make(map[string]Plugin),
+		enabled:     make(map[string]bool),
+		pluginOrder: []string{},
 	}
 }
 
@@ -42,13 +44,14 @@ func (r *Registry) Register(plugin Plugin) {
 	klog.V(2).Infof("Registered plugin: %s", name)
 }
 
-// Enable enables a plugin by name
+// Enable enables a plugin by name and records the execution order
 func (r *Registry) Enable(name string) error {
 	if _, exists := r.plugins[name]; !exists {
 		return fmt.Errorf("plugin %s not found", name)
 	}
 	r.enabled[name] = true
-	klog.Infof("✅ Enabled cleanup plugin: %s", name)
+	r.pluginOrder = append(r.pluginOrder, name)
+	klog.Infof("✅ Enabled cleanup plugin: %s (position %d)", name, len(r.pluginOrder))
 	return nil
 }
 
@@ -58,33 +61,38 @@ func (r *Registry) Disable(name string) {
 	klog.Infof("Disabled cleanup plugin: %s", name)
 }
 
-// RunAll runs all enabled plugins that should run for the given node
+// RunAll runs all enabled plugins in the order they were enabled (from ENABLED_PLUGINS env var)
 func (r *Registry) RunAll(ctx context.Context, node *corev1.Node) error {
-	klog.Infof("Running cleanup plugins for node: %s", node.Name)
+	klog.InfoS("Starting cleanup plugins", "node", node.Name, "pluginOrder", r.pluginOrder)
 
 	ranCount := 0
-	for name, plugin := range r.plugins {
-		// Skip if plugin is not enabled
-		if !r.enabled[name] {
-			klog.V(2).Infof("Skipping disabled plugin: %s", name)
+
+	// Execute plugins in the order they were enabled
+	for i, name := range r.pluginOrder {
+		plugin, exists := r.plugins[name]
+		if !exists {
+			klog.ErrorS(nil, "Plugin not found in registry", "plugin", name)
 			continue
 		}
 
 		// Skip if plugin should not run for this node
 		if !plugin.ShouldRun(node) {
-			klog.V(2).Infof("Plugin %s: skipping (conditions not met)", name)
+			klog.V(2).InfoS("Plugin skipped - conditions not met", "plugin", name, "node", node.Name)
 			continue
 		}
 
-		klog.Infof("🔧 Running plugin: %s", name)
+		klog.InfoS("Running plugin", "plugin", name, "position", i+1, "total", len(r.pluginOrder), "node", node.Name)
+
 		if err := plugin.Cleanup(ctx, node); err != nil {
+			klog.ErrorS(err, "Plugin execution failed", "plugin", name, "node", node.Name)
 			return fmt.Errorf("plugin %s failed: %w", name, err)
 		}
-		klog.Infof("✅ Plugin %s completed successfully", name)
+
+		klog.InfoS("Plugin completed successfully", "plugin", name, "node", node.Name)
 		ranCount++
 	}
 
-	klog.Infof("Cleanup completed: ran %d plugins for node %s", ranCount, node.Name)
+	klog.InfoS("Cleanup completed", "node", node.Name, "executedPlugins", ranCount, "totalPlugins", len(r.pluginOrder))
 	return nil
 }
 

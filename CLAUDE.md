@@ -4,40 +4,140 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A **production-ready Kubernetes Mutating Admission Webhook** that automatically manages node cleanup before deletion using finalizers. Ensures critical cleanup tasks (Portworx decommissioning, storage cleanup, notifications) complete before nodes are removed.
+A **production-ready Kubernetes Mutating Admission Webhook** with a **plugin-based cleanup system** that automatically manages node cleanup before deletion using finalizers.
 
-**Key Design**: Uses webhook + watcher pattern instead of full operator for simplicity and reliability. Webhook atomically adds finalizers at node creation; watcher orchestrates cleanup on deletion.
+**Key Features**:
+- ✅ **Plugin-based architecture** - Easy to add custom cleanup logic
+- ✅ **Environment-driven configuration** - Configure via env vars
+- ✅ **Automatic finalizer management** - Adds finalizers to all nodes
+- ✅ **Production-ready** - Helm charts, CI/CD, documentation
 
 ## Repository Structure
 
 ```
 NodesOperator/
-├── cmd/webhook/main.go          # Entry point - webhook server + watcher
+├── cmd/webhook/main.go              # Entry point - initializes plugins
 ├── pkg/
-│   ├── webhook/server.go        # Admission webhook handler
-│   └── watcher/watcher.go       # Node cleanup watcher
+│   ├── plugins/                     # Plugin system
+│   │   ├── plugin.go               # Plugin interface & registry
+│   │   ├── logger.go               # Logger plugin (default)
+│   │   ├── portworx.go             # Portworx plugin
+│   │   └── ADDING_PLUGINS.md       # Plugin development guide
+│   ├── watcher/watcher.go          # Node cleanup watcher
+│   ├── webhook/server.go           # Admission webhook handler
+│   └── config/config.go            # Configuration system
 ├── deploy/
 │   ├── helm/node-cleanup-webhook/  # Production Helm chart
-│   │   ├── Chart.yaml
-│   │   ├── values.yaml
-│   │   └── templates/           # K8s resource templates
-│   └── manifests/               # Raw Kubernetes manifests
+│   └── manifests/                  # Raw Kubernetes manifests
 ├── docs/
-│   ├── ARCHITECTURE.md          # Design decisions and flow
-│   └── DEVELOPMENT.md           # Development guide
-├── .github/workflows/           # CI/CD pipelines
-├── scripts/                     # Utility scripts
-├── Dockerfile                   # Multi-stage container build
-├── Makefile                     # Build and deployment automation
-├── go.mod                       # Go dependencies
-└── README.md                    # User-facing documentation
+│   ├── ARCHITECTURE.md             # Design decisions
+│   ├── DEVELOPMENT.md              # Development guide
+│   ├── IMPROVEMENTS.md             # Future enhancements
+│   ├── CODE_QUALITY.md             # Code quality guidelines
+│   └── CONTEXT_USAGE.md            # Why and how to use context
+│   ├── AIR_GAPPED_DEPLOYMENT.md    # Disconnected environment deployment
+├── vendor/                         # Vendored dependencies (air-gapped support)
+├── .env.example                     # Configuration examples
+└── README.md                        # User documentation
 ```
+
+## Plugin System
+
+### Available Plugins
+
+- **logger** - Logs node information with structured logging (enabled by default)
+- **portworx** - Portworx decommission (placeholder implementation)
+
+### Enabling Plugins
+
+```bash
+# Via environment variable (ORDER MATTERS!)
+export ENABLED_PLUGINS=logger,portworx
+
+# Plugins execute in the order specified:
+# 1. logger runs first
+# 2. portworx runs second
+
+# Configure plugin options
+export PORTWORX_API_ENDPOINT=http://portworx-api:9001
+export PORTWORX_LABEL_SELECTOR=px/enabled=true
+```
+
+### ⚡ Plugin Execution Order
+
+**IMPORTANT**: Plugins run in the **exact order** you specify in `ENABLED_PLUGINS`.
+
+Example:
+```bash
+# This order: logger → drain → portworx
+ENABLED_PLUGINS=logger,drain,portworx
+
+# Different order: portworx → drain → logger
+ENABLED_PLUGINS=portworx,drain,logger
+```
+
+The order is tracked in the plugin registry and logged on startup:
+
+```log
+✅ Enabled cleanup plugin: logger (position 1)
+✅ Enabled cleanup plugin: portworx (position 2)
+```
+
+During cleanup:
+
+```log
+Running plugin plugin="logger" position=1 total=2
+Running plugin plugin="portworx" position=2 total=2
+```
+
+### 📊 Structured Logging
+
+All logging uses **klog's structured logging** (`InfoS`, `ErrorS`) for better observability:
+
+**Benefits:**
+- Machine-parseable logs (JSON format compatible)
+- Easy to query in log aggregation systems (Elasticsearch, Loki)
+- Consistent key-value pairs across all logs
+- Better context for debugging
+
+**Example logs:**
+```log
+I1213 02:19:38.936635 16796 plugin.go:54] "Enabled cleanup plugin" plugin="logger" position=1
+I1213 02:19:38.936639 16796 plugin.go:54] "Enabled cleanup plugin" plugin="portworx" position=2
+I1213 02:19:38.936967 16796 watcher.go:121] "Starting cleanup watcher" finalizerName="infra.894.io/node-cleanup"
+```
+
+**In code:**
+```go
+// Structured logging (GOOD)
+klog.InfoS("Plugin completed successfully", "plugin", name, "node", node.Name, "duration", elapsed)
+
+// Old style (AVOID)
+klog.Infof("Plugin %s completed for node %s in %v", name, node.Name, elapsed)
+```
+
+### Adding a New Plugin
+
+See [pkg/plugins/ADDING_PLUGINS.md](pkg/plugins/ADDING_PLUGINS.md) for complete guide.
+
+Quick summary:
+1. Create `pkg/plugins/myplugin.go`
+2. Implement the `Plugin` interface
+3. Register in `cmd/webhook/main.go`
+4. Add config in `pkg/config/config.go`
+5. Enable with `ENABLED_PLUGINS=logger,myplugin`
 
 ## Quick Commands
 
 ### Development
 ```bash
-# Run locally (auto-generates certs)
+# Run locally with logger plugin
+export ENABLED_PLUGINS=logger
+make run-local
+
+# Run with multiple plugins
+export ENABLED_PLUGINS=logger,portworx
+export PORTWORX_API_ENDPOINT=http://my-api:9001
 make run-local
 
 # Build binary
@@ -53,232 +153,217 @@ make lint
 
 ### Deployment
 ```bash
-# Deploy with Helm (recommended)
+# Deploy with Helm
 make deploy IMAGE_REGISTRY=myregistry.com IMAGE_TAG=v1.0.0
 
-# Deploy with raw manifests
-make deploy-manifests
-
-# Upgrade existing deployment
+# Upgrade
 make upgrade
 
-# Remove from cluster
-make undeploy
-```
-
-### Debugging
-```bash
 # View logs
 make logs
 
 # Check status
 make status
-
-# Describe pods
-make describe
-```
-
-### Building
-```bash
-# Build container image
-make build IMAGE_REGISTRY=myregistry.com IMAGE_TAG=v1.0.0
-
-# Build and push
-make push
 ```
 
 ## Code Organization
 
 ### Entry Point: [cmd/webhook/main.go](cmd/webhook/main.go)
-- Starts both webhook server (port 8443) and cleanup watcher
-- Creates Kubernetes client (in-cluster or kubeconfig)
-- Handles graceful shutdown
-- Registers HTTP endpoints: `/mutate-node`, `/healthz`, `/readyz`
+- Loads configuration from environment
+- Initializes plugin registry
+- Registers available plugins (logger, portworx)
+- Enables plugins based on ENABLED_PLUGINS
+- Starts webhook server and cleanup watcher
 
-### Webhook Handler: [pkg/webhook/server.go](pkg/webhook/server.go)
-- `HandleMutateNode()` - HTTP handler for admission requests
-- `mutateNode()` - Adds finalizer via JSON patch
-- Only intercepts Node CREATE operations
-- Stateless operation
+### Plugin System: [pkg/plugins/](pkg/plugins/)
+- `plugin.go` - Plugin interface and registry
+- `logger.go` - Logs node deletion info
+- `portworx.go` - Portworx decommission (implement your logic here)
+- `ADDING_PLUGINS.md` - Step-by-step guide to add plugins
 
-### Cleanup Watcher: [pkg/watcher/watcher.go](pkg/watcher/watcher.go)
-**Key Functions**:
-- `New()` - Creates watcher with client-go informer
-- `Run()` - Main loop: starts informer, initializes existing nodes, processes queue
-- `initializeExistingNodes()` - Adds finalizers to all nodes on startup
-- `ensureFinalizer()` - Ensures finalizer present on new/updated nodes
-- `enqueueIfDeleting()` - Detects deletion and queues for cleanup
-- `processNode()` - Handles single node cleanup with retry
-- `runCleanup()` - **Placeholder for actual cleanup logic** (line ~207)
-- `removeFinalizer()` - Removes finalizer after successful cleanup
+### Configuration: [pkg/config/config.go](pkg/config/config.go)
+- Loads from environment variables
+- Plugin-specific configuration
+- See `.env.example` for all options
 
-## Implementation Status
+### Watcher: [pkg/watcher/watcher.go](pkg/watcher/watcher.go)
+- Watches for node deletions
+- Runs enabled plugins via registry
+- Manages finalizers
+- Handles retries
 
-### ✅ Complete
-- Webhook adds finalizer to nodes atomically on CREATE
-- Watcher adds finalizers to existing nodes on startup
-- Watcher automatically adds finalizers to new nodes
-- Cleanup triggered on node deletion
-- Retry logic with 10s backoff
-- Emergency bypass via annotation
-- Production-ready Helm chart
-- CI/CD pipelines
-- Comprehensive documentation
+### Webhook: [pkg/webhook/server.go](pkg/webhook/server.go)
+- Adds finalizers on node CREATE
+- Stateless HTTP handler
 
-### ⚠️ Placeholder (Needs Implementation)
-**[pkg/watcher/watcher.go:~207](pkg/watcher/watcher.go)** - `runCleanup()` function
+## Configuration
 
-Currently just prints node name. Replace with actual cleanup:
+### Environment Variables
+
+```bash
+# Webhook settings
+PORT=8443
+TLS_CERT_FILE=/etc/webhook/certs/tls.crt
+TLS_KEY_FILE=/etc/webhook/certs/tls.key
+
+# Plugin selection
+ENABLED_PLUGINS=logger,portworx
+
+# Logger plugin
+LOGGER_FORMAT=pretty
+LOGGER_VERBOSITY=info
+
+# Portworx plugin
+PORTWORX_LABEL_SELECTOR=px/enabled=true
+PORTWORX_API_ENDPOINT=http://portworx-api:9001
+PORTWORX_TIMEOUT=300s
+```
+
+Full examples in [.env.example](.env.example)
+
+## Common Tasks
+
+### Implement Portworx Cleanup Logic
+
+Edit [pkg/plugins/portworx.go](pkg/plugins/portworx.go), find the `Cleanup()` function (line ~42):
+
 ```go
-func (w *Watcher) runCleanup(ctx context.Context, node *corev1.Node) error {
-    // Add your cleanup logic here:
-    // - Decommission Portworx: pxctl cluster decommission
-    // - Clean up storage: migrate PVs, remove volumes
-    // - Notify external systems: CMDB, Slack, monitoring
+func (p *PortworxPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
+    klog.Infof("🔧 Portworx: Decommissioning node %s", node.Name)
 
+    // TODO: Replace this with actual implementation
+    // Option 1: Call Portworx REST API
+    // Option 2: Execute pxctl via kubectl exec
+    // Option 3: Delete/Update StorageNode CRD
+
+    // Your implementation here
+    return p.callPortworxAPI(ctx, node.Name)
+}
+```
+
+### Add a Custom Plugin
+
+1. **Create plugin file** `pkg/plugins/myservice.go`:
+```go
+package plugins
+
+import (
+    "context"
+    corev1 "k8s.io/api/core/v1"
+    "k8s.io/client-go/kubernetes"
+)
+
+type MyServicePlugin struct {
+    BasePlugin
+}
+
+func NewMyServicePlugin(client kubernetes.Interface) *MyServicePlugin {
+    return &MyServicePlugin{
+        BasePlugin: BasePlugin{name: "myservice", client: client},
+    }
+}
+
+func (p *MyServicePlugin) ShouldRun(node *corev1.Node) bool {
+    return true // Run for all nodes
+}
+
+func (p *MyServicePlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
+    // Your cleanup logic
     return nil
 }
 ```
 
-**Important**: Cleanup must be idempotent (safe to run multiple times).
-
-## Helm Chart Configuration
-
-### Key Values ([deploy/helm/node-cleanup-webhook/values.yaml](deploy/helm/node-cleanup-webhook/values.yaml))
-
-```yaml
-replicaCount: 2                  # HA deployment
-image:
-  repository: registry.example.com/node-cleanup-webhook
-  tag: latest
-
-webhook:
-  failurePolicy: Ignore          # Allow node creation if webhook down
-  certManager:
-    enabled: true                # Auto TLS cert management
-
-cleanup:
-  portworx:
-    enabled: false               # Enable Portworx cleanup
-  timeout: 300s
-  retryDelay: 10s
-
-log:
-  verbosity: 2                   # 0-4, higher = more verbose
+2. **Register in main.go** (line ~73):
+```go
+pluginRegistry.Register(plugins.NewMyServicePlugin(client))
 ```
 
-## Common Tasks
+3. **Add config in config.go** (line ~59):
+```go
+c.PluginConfigs["myservice"] = PluginConfig{
+    Enabled: c.isPluginEnabled("myservice"),
+    Options: map[string]string{
+        "endpoint": getEnv("MYSERVICE_ENDPOINT", "http://api:8080"),
+    },
+}
+```
 
-### Adding Cleanup Logic
-1. Edit [pkg/watcher/watcher.go](pkg/watcher/watcher.go)
-2. Modify `runCleanup()` function
-3. Ensure cleanup is idempotent
-4. Test locally with `make run-local`
-5. Build and deploy: `make build push deploy`
-
-### Modifying Helm Chart
-1. Edit templates in `deploy/helm/node-cleanup-webhook/templates/`
-2. Update values in `deploy/helm/node-cleanup-webhook/values.yaml`
-3. Lint: `helm lint deploy/helm/node-cleanup-webhook`
-4. Test template: `helm template test deploy/helm/node-cleanup-webhook`
-5. Upgrade: `make upgrade`
-
-### Changing Finalizer Name
-1. Update constant in [pkg/watcher/watcher.go](pkg/watcher/watcher.go): `FinalizerName`
-2. Update constant in [pkg/webhook/server.go](pkg/webhook/server.go): `FinalizerName`
-3. Update in [deploy/helm/node-cleanup-webhook/values.yaml](deploy/helm/node-cleanup-webhook/values.yaml): `finalizer.name`
+4. **Enable it**:
+```bash
+export ENABLED_PLUGINS=logger,myservice
+make run-local
+```
 
 ### Emergency: Skip Cleanup
+
 ```bash
 kubectl annotate node <node-name> infra.894.io/skip-cleanup=true
 kubectl delete node <node-name>
 ```
 
-## Testing Flow
+## Testing
 
-1. **Start webhook locally**:
-   ```bash
-   make run-local
-   ```
+### Test Locally
 
-2. **Create test node**:
-   ```bash
-   kubectl create -f - <<EOF
-   apiVersion: v1
-   kind: Node
-   metadata:
-     name: test-node
-   spec:
-     podCIDR: 10.244.1.0/24
-   EOF
-   ```
-
-3. **Verify finalizer added automatically**:
-   ```bash
-   kubectl get node test-node -o jsonpath='{.metadata.finalizers}'
-   # Should show: ["infra.894.io/node-cleanup"]
-   ```
-
-4. **Delete and watch cleanup**:
-   ```bash
-   kubectl delete node test-node
-   # Watch logs to see cleanup running
-   ```
-
-## Architecture Highlights
-
-### Why Webhook vs Operator?
-- **Simpler**: No reconciliation loop, leader election, or state management
-- **Atomic**: Finalizer added at creation time (no race conditions)
-- **Reliable**: `failurePolicy: Ignore` allows nodes to create if webhook unavailable
-
-### Data Flow
-```
-1. CREATE node → Webhook adds finalizer → Node created with finalizer
-2. DELETE node → Sets deletionTimestamp (blocked by finalizer)
-3. Watcher detects → Runs cleanup → Removes finalizer
-4. Kubernetes completes deletion
-```
-
-### High Availability
-- 2 replicas (configurable)
-- PodDisruptionBudget (minAvailable: 1)
-- Stateless webhook (any replica handles requests)
-- Each watcher replica processes different nodes
-
-## Security
-
-- Runs as non-root (UID 65532)
-- Read-only root filesystem
-- Drops all capabilities
-- Minimal RBAC: nodes (get/list/watch/patch/update), events (create/patch)
-- TLS-secured webhook endpoint
-
-## Troubleshooting
-
-### Node stuck in Terminating
 ```bash
-# Check logs
-make logs
+# Start webhook
+export ENABLED_PLUGINS=logger
+make run-local
 
-# Check finalizer
-kubectl get node <name> -o jsonpath='{.metadata.finalizers}'
+# In another terminal, create test node
+kubectl create -f - <<EOF
+apiVersion: v1
+kind: Node
+metadata:
+  name: test-node
+spec:
+  podCIDR: 10.244.1.0/24
+EOF
 
-# Emergency bypass
-kubectl annotate node <name> infra.894.io/skip-cleanup=true
+# Verify finalizer added
+kubectl get node test-node -o jsonpath='{.metadata.finalizers}'
+
+# Delete and watch cleanup
+kubectl delete node test-node
 ```
 
-### Webhook not adding finalizers
-```bash
-# Check webhook running
-kubectl get pods -n node-cleanup-system
-
-# Check webhook config
-kubectl get mutatingwebhookconfiguration
-
-# Check TLS certs
-kubectl get certificate -n node-cleanup-system
+You should see:
 ```
+📦 Enabled plugins: [logger]
+🔧 Running plugin: logger
+═══════════════════════════════════════════════════════════════
+  🗑️  DELETING NODE: test-node
+═══════════════════════════════════════════════════════════════
+✅ Plugin logger completed successfully
+```
+
+## Architecture
+
+### Plugin Flow
+
+```
+1. Node Created
+   └─> Webhook adds finalizer automatically
+
+2. Node Deleted
+   └─> Deletion blocked by finalizer
+   └─> Watcher detects deletionTimestamp
+   └─> Plugin Registry runs enabled plugins:
+       ├─> logger: Logs node info ✅
+       ├─> portworx: Decommissions (if enabled) ✅
+       └─> custom: Your plugin ✅
+   └─> All plugins succeed
+   └─> Remove finalizer
+   └─> Kubernetes completes deletion
+```
+
+### Why Plugins?
+
+- ✅ **Modular** - Each cleanup task is isolated
+- ✅ **Configurable** - Enable/disable via env vars
+- ✅ **Extensible** - Add new plugins in minutes
+- ✅ **Testable** - Test each plugin independently
+- ✅ **Maintainable** - Changes don't affect other plugins
 
 ## Key Constants
 
@@ -289,20 +374,57 @@ kubectl get certificate -n node-cleanup-system
 
 ## Documentation
 
-- [README.md](README.md) - User guide
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Design and architecture
+- [README.md](README.md) - User guide with quick start
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Design decisions
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Development guide
-- [deploy/helm/node-cleanup-webhook/values.yaml](deploy/helm/node-cleanup-webhook/values.yaml) - Helm configuration
+- [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) - Future enhancements (25+ ideas)
+- [docs/CODE_QUALITY.md](docs/CODE_QUALITY.md) - Code quality guidelines
+- [pkg/plugins/ADDING_PLUGINS.md](pkg/plugins/ADDING_PLUGINS.md) - Plugin guide
 
-## CI/CD
+## Troubleshooting
 
-- **On PR/Push**: Lint, test, build, validate Helm chart
-- **On Tag (v\*)**: Build multi-arch images, push to registry, create release
+### Plugin not running
 
-## Next Steps for Production
+```bash
+# Check which plugins are enabled
+make logs | grep "Enabled plugins"
+# Should show: 📦 Enabled plugins: [logger portworx]
 
-1. Implement actual cleanup logic in `runCleanup()`
-2. Add unit tests for webhook and watcher
-3. Configure monitoring (Prometheus metrics)
-4. Set up alerting for cleanup failures
-5. Document your specific cleanup procedures
+# Verify plugin configuration
+make logs | grep "Plugin \["
+# Shows config for each plugin
+```
+
+### Node stuck in Terminating
+
+```bash
+# Check finalizer
+kubectl get node <name> -o jsonpath='{.metadata.finalizers}'
+
+# Check logs for cleanup errors
+make logs
+
+# Emergency bypass
+kubectl annotate node <name> infra.894.io/skip-cleanup=true
+```
+
+### Plugin failing
+
+```bash
+# View detailed logs
+make logs
+
+# Look for plugin-specific errors
+# Example: "Plugin portworx failed: connection refused"
+
+# Fix the plugin configuration
+export PORTWORX_API_ENDPOINT=http://correct-endpoint:9001
+```
+
+## Next Steps
+
+1. **Implement Portworx cleanup** in [pkg/plugins/portworx.go](pkg/plugins/portworx.go)
+2. **Add your custom plugins** - see [pkg/plugins/ADDING_PLUGINS.md](pkg/plugins/ADDING_PLUGINS.md)
+3. **Add tests** - see [docs/CODE_QUALITY.md](docs/CODE_QUALITY.md)
+4. **Deploy to production** - see [README.md](README.md) deployment section
+5. **Consider improvements** - see [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) for 25+ ideas
