@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/894/node-cleanup-webhook/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
@@ -19,12 +20,12 @@ type PortworxPlugin struct {
 // NewPortworxPlugin creates a new Portworx cleanup plugin
 func NewPortworxPlugin(client kubernetes.Interface, labelSelector string) *PortworxPlugin {
 	if labelSelector == "" {
-		labelSelector = "px/enabled=true"
+		labelSelector = constants.DefaultPortworxLabelSelector
 	}
 
 	return &PortworxPlugin{
 		BasePlugin: BasePlugin{
-			name:   "portworx",
+			name:   constants.PortworxPluginName,
 			client: client,
 		},
 		labelSelector: labelSelector,
@@ -34,14 +35,14 @@ func NewPortworxPlugin(client kubernetes.Interface, labelSelector string) *Portw
 // ShouldRun checks if this node has Portworx enabled
 func (p *PortworxPlugin) ShouldRun(node *corev1.Node) bool {
 	// Check if node has the Portworx label
-	if val, ok := node.Labels["px/enabled"]; ok && val == "true" {
-		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", "px/enabled=true")
+	if val, ok := node.Labels[constants.PortworxEnabledLabel]; ok && val == constants.PortworxEnabledValue {
+		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", constants.DefaultPortworxLabelSelector)
 		return true
 	}
 
 	// Alternative: check for px/status label
-	if status, ok := node.Labels["px/status"]; ok {
-		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", "px/status", "status", status)
+	if status, ok := node.Labels[constants.PortworxStatusLabel]; ok {
+		klog.V(2).InfoS("Portworx node detected", "node", node.Name, "label", constants.PortworxStatusLabel, "status", status)
 		return true
 	}
 

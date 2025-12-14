@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/894/node-cleanup-webhook/pkg/constants"
 	"github.com/894/node-cleanup-webhook/pkg/plugins"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,14 +18,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const (
-	// FinalizerName is the finalizer we watch for
-	FinalizerName = "infra.894.io/node-cleanup"
-
-	// SkipCleanupAnnotation allows bypassing cleanup in emergencies
-	SkipCleanupAnnotation = "infra.894.io/skip-cleanup"
-)
-
 // Watcher watches for nodes being deleted and runs cleanup
 type Watcher struct {
 	client         kubernetes.Interface
@@ -33,21 +26,22 @@ type Watcher struct {
 	pluginRegistry *plugins.Registry
 	// Track nodes being processed to avoid duplicate work
 	processing sync.Map
-	// Context for background operations (set when Run() is called)
+	// Context for background operations
 	ctx context.Context
 }
 
 // New creates a new cleanup watcher
-func New(client kubernetes.Interface, pluginRegistry *plugins.Registry) *Watcher {
+func New(ctx context.Context, client kubernetes.Interface, pluginRegistry *plugins.Registry) *Watcher {
 	// Create informer factory
-	factory := informers.NewSharedInformerFactory(client, 30*time.Second)
+	factory := informers.NewSharedInformerFactory(client, constants.DefaultInformerResyncPeriod)
 	nodeInformer := factory.Core().V1().Nodes().Informer()
 
 	watcher := &Watcher{
 		client:         client,
 		informer:       nodeInformer,
-		workqueue:      make(chan string, 100),
+		workqueue:      make(chan string, constants.DefaultWorkQueueSize),
 		pluginRegistry: pluginRegistry,
+		ctx:            ctx,
 	}
 
 	// Add event handlers
@@ -82,22 +76,16 @@ func (w *Watcher) ensureFinalizer(node *corev1.Node) {
 	}
 
 	// Skip if finalizer already exists
-	if containsFinalizer(node.Finalizers, FinalizerName) {
+	if containsFinalizer(node.Finalizers, constants.FinalizerName) {
 		return
 	}
 
 	// Add finalizer in the background
 	go func() {
-		// Use watcher context if available, otherwise use background
-		ctx := w.ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-
-		if err := w.addFinalizer(ctx, node); err != nil {
-			klog.ErrorS(err, "Failed to add finalizer", "node", node.Name, "finalizer", FinalizerName)
+		if err := w.addFinalizer(w.ctx, node); err != nil {
+			klog.ErrorS(err, "Failed to add finalizer", "node", node.Name, "finalizer", constants.FinalizerName)
 		} else {
-			klog.InfoS("Finalizer added successfully", "node", node.Name, "finalizer", FinalizerName)
+			klog.InfoS("Finalizer added successfully", "node", node.Name, "finalizer", constants.FinalizerName)
 		}
 	}()
 }
@@ -109,7 +97,7 @@ func (w *Watcher) enqueueIfDeleting(node *corev1.Node) {
 	}
 
 	// Only process if our finalizer is present
-	if !containsFinalizer(node.Finalizers, FinalizerName) {
+	if !containsFinalizer(node.Finalizers, constants.FinalizerName) {
 		return
 	}
 
@@ -124,23 +112,20 @@ func (w *Watcher) enqueueIfDeleting(node *corev1.Node) {
 }
 
 // Run starts the watcher
-func (w *Watcher) Run(ctx context.Context) {
-	klog.InfoS("Starting cleanup watcher", "finalizerName", FinalizerName)
-
-	// Store context for background operations
-	w.ctx = ctx
+func (w *Watcher) Run() {
+	klog.InfoS("Starting cleanup watcher", "finalizerName", constants.FinalizerName)
 
 	// Start the informer
-	go w.informer.Run(ctx.Done())
+	go w.informer.Run(w.ctx.Done())
 
 	// Wait for cache sync
-	if !cache.WaitForCacheSync(ctx.Done(), w.informer.HasSynced) {
+	if !cache.WaitForCacheSync(w.ctx.Done(), w.informer.HasSynced) {
 		klog.Fatal("Failed to sync informer cache")
 	}
 	klog.InfoS("Informer cache synced successfully")
 
 	// Initialize finalizers on existing nodes
-	if err := w.initializeExistingNodes(ctx); err != nil {
+	if err := w.initializeExistingNodes(w.ctx); err != nil {
 		klog.ErrorS(err, "Failed to initialize existing nodes")
 	}
 
@@ -148,8 +133,8 @@ func (w *Watcher) Run(ctx context.Context) {
 	for {
 		select {
 		case nodeName := <-w.workqueue:
-			w.processNode(ctx, nodeName)
-		case <-ctx.Done():
+			w.processNode(w.ctx, nodeName)
+		case <-w.ctx.Done():
 			klog.InfoS("Cleanup watcher stopping gracefully")
 			return
 		}
@@ -169,18 +154,18 @@ func (w *Watcher) processNode(ctx context.Context, nodeName string) {
 	}
 
 	// Double-check it's still being deleted with our finalizer
-	if node.DeletionTimestamp == nil || !containsFinalizer(node.Finalizers, FinalizerName) {
+	if node.DeletionTimestamp == nil || !containsFinalizer(node.Finalizers, constants.FinalizerName) {
 		klog.V(2).InfoS("Node no longer needs cleanup", "node", nodeName,
 			"isDeleting", node.DeletionTimestamp != nil,
-			"hasFinalizer", containsFinalizer(node.Finalizers, FinalizerName))
+			"hasFinalizer", containsFinalizer(node.Finalizers, constants.FinalizerName))
 		return
 	}
 
 	// Check for skip annotation
-	if node.Annotations[SkipCleanupAnnotation] == "true" {
+	if node.Annotations[constants.SkipCleanupAnnotation] == "true" {
 		klog.InfoS("Skip cleanup annotation detected - bypassing cleanup",
 			"node", nodeName,
-			"annotation", SkipCleanupAnnotation)
+			"annotation", constants.SkipCleanupAnnotation)
 		if err := w.removeFinalizer(ctx, node); err != nil {
 			klog.ErrorS(err, "Failed to remove finalizer after skip", "node", nodeName)
 		}
@@ -195,7 +180,7 @@ func (w *Watcher) processNode(ctx context.Context, nodeName string) {
 		// Re-enqueue for retry after backoff (respects context cancellation)
 		go func() {
 			select {
-			case <-time.After(10 * time.Second):
+			case <-time.After(constants.DefaultRetryDelay):
 				w.processing.Delete(nodeName)
 				// Re-fetch and re-enqueue
 				if n, err := w.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}); err == nil {
@@ -246,7 +231,7 @@ func (w *Watcher) removeFinalizer(ctx context.Context, node *corev1.Node) error 
 	// Build new finalizers list without our finalizer
 	newFinalizers := []string{}
 	for _, f := range node.Finalizers {
-		if f != FinalizerName {
+		if f != constants.FinalizerName {
 			newFinalizers = append(newFinalizers, f)
 		}
 	}
@@ -274,13 +259,13 @@ func (w *Watcher) removeFinalizer(ctx context.Context, node *corev1.Node) error 
 		return fmt.Errorf("failed to patch node: %w", err)
 	}
 
-	klog.InfoS("Finalizer removed successfully", "node", node.Name, "finalizer", FinalizerName)
+	klog.InfoS("Finalizer removed successfully", "node", node.Name, "finalizer", constants.FinalizerName)
 	return nil
 }
 
 // initializeExistingNodes adds finalizers to all existing nodes that don't have them
 func (w *Watcher) initializeExistingNodes(ctx context.Context) error {
-	klog.InfoS("Initializing finalizers on existing nodes", "finalizer", FinalizerName)
+	klog.InfoS("Initializing finalizers on existing nodes", "finalizer", constants.FinalizerName)
 
 	// List all nodes
 	nodes, err := w.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
@@ -302,7 +287,7 @@ func (w *Watcher) initializeExistingNodes(ctx context.Context) error {
 		}
 
 		// Check if finalizer already exists
-		if containsFinalizer(node.Finalizers, FinalizerName) {
+		if containsFinalizer(node.Finalizers, constants.FinalizerName) {
 			klog.V(2).InfoS("Skipping node - already has finalizer", "node", node.Name)
 			skippedCount++
 			continue
@@ -326,7 +311,7 @@ func (w *Watcher) initializeExistingNodes(ctx context.Context) error {
 func (w *Watcher) addFinalizer(ctx context.Context, node *corev1.Node) error {
 	// Build new finalizers list with our finalizer
 	newFinalizers := append([]string{}, node.Finalizers...)
-	newFinalizers = append(newFinalizers, FinalizerName)
+	newFinalizers = append(newFinalizers, constants.FinalizerName)
 
 	// Create patch
 	patch := map[string]interface{}{

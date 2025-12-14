@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/894/node-cleanup-webhook/pkg/constants"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
@@ -19,7 +20,7 @@ type LoggerPlugin struct {
 func NewLoggerPlugin(client kubernetes.Interface) *LoggerPlugin {
 	return &LoggerPlugin{
 		BasePlugin: BasePlugin{
-			name:   "logger",
+			name:   constants.LoggerPluginName,
 			client: client,
 		},
 	}
@@ -45,7 +46,7 @@ func (p *LoggerPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
 		"uid", node.UID,
 		"labelCount", len(node.Labels),
 		"conditionCount", len(node.Status.Conditions),
-		"cleanupDelay", "15s",
+		"cleanupDelay", constants.POCCleanupDelay.String(),
 	)
 
 	// POC: Sleep for 15 seconds to demonstrate that deletion waits for cleanup
@@ -54,7 +55,7 @@ func (p *LoggerPlugin) Cleanup(ctx context.Context, node *corev1.Node) error {
 
 	// Use select with context to respect cancellation
 	select {
-	case <-time.After(15 * time.Second):
+	case <-time.After(constants.POCCleanupDelay):
 		// Continue with cleanup
 		klog.InfoS("Cleanup delay completed", "node", node.Name)
 		fmt.Printf("✅ 15 second delay completed!\n\n")
